@@ -1,9 +1,8 @@
 # =========================================
-# SIMULADOR PTAR - PRODUCCIÓN (MEJORADO)
+# SIMULADOR PTAR - PRODUCCIÓN (REALISTA PRO)
 # =========================================
 
 import time
-import os
 import numpy as np
 from supabase import create_client
 
@@ -11,7 +10,7 @@ from supabase import create_client
 # CONFIG
 # =========================================
 SUPABASE_URL = "https://svomqhjdyyxubpiqmfex.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN2b21xaGpkeXl4dWJwaXFtZmV4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzcwOTMwNDUsImV4cCI6MjA5MjY2OTA0NX0.B04htEJ0iTye5jOlUpbNq5nl4SdvVuXbQr0QgxkYjks"  # ⚠️ reemplaza por tu key real
+SUPABASE_KEY = "TU_KEY_AQUI"
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -25,11 +24,11 @@ estado = {
     "no3": 2.5,
     "fase": "aireacion",
     "od_max": 4.2,
-    "od_min": 0.3
+    "od_min": 0.2
 }
 
 # =========================================
-# ACTUALIZAR FASE (CON HISTÉRESIS)
+# ACTUALIZAR FASE
 # =========================================
 def actualizar_fase(od):
 
@@ -38,60 +37,59 @@ def actualizar_fase(od):
     if fase == "aireacion" and od >= estado["od_max"]:
         estado["fase"] = "transicion"
 
-    elif fase == "transicion" and od <= 0.4:
+    elif fase == "transicion" and od <= 0.5:
         estado["fase"] = "anoxica"
 
-    elif fase == "anoxica" and od >= (estado["od_min"] + 0.2):
+    elif fase == "anoxica" and od <= estado["od_min"]:
         estado["fase"] = "aireacion"
 
-        # 🔥 NUEVO CICLO → NUEVOS LÍMITES
+        # 🔥 NUEVO CICLO → límites variables (NO SIMÉTRICOS)
         estado["od_max"] = np.random.uniform(3.8, 4.6)
-        estado["od_min"] = np.random.uniform(0.15, 0.4)
+        estado["od_min"] = np.random.uniform(0.1, 0.3)
 
 # =========================================
-# OD DINÁMICO (CLAVE)
+# OD DINÁMICO (NO SIMÉTRICO)
 # =========================================
 def actualizar_od(prev_od):
 
     fase = estado["fase"]
 
-    # velocidades variables
-    vel_subida = np.random.uniform(0.02, 0.06)
-    vel_bajada = np.random.uniform(0.08, 0.22)
+    vel_subida = np.random.uniform(0.02, 0.07)
+    vel_bajada = np.random.uniform(0.08, 0.25)
 
     if fase == "aireacion":
 
         od = prev_od + vel_subida
 
-        # curva más suave
-        if od > 2:
-            od += np.random.uniform(0.0, 0.03)
+        # 🔥 comportamiento NO SIMÉTRICO
+        if np.random.rand() < 0.3:
+            # sobrepaso del máximo
+            od += np.random.uniform(0.3, 1.4)
+        elif np.random.rand() < 0.3:
+            # no alcanza el máximo
+            od = min(od, estado["od_max"] - np.random.uniform(0.2, 0.5))
 
-        od = min(od, estado["od_max"] + 0.3)
+        od = min(od, estado["od_max"] + 1.4)
 
     elif fase == "transicion":
 
         od = prev_od - vel_bajada
 
-        # caída más rápida al inicio
         if prev_od > 2.5:
-            od -= np.random.uniform(0.05, 0.15)
+            od -= np.random.uniform(0.05, 0.2)
 
-        od = max(od, 0.3)
+        od = max(od, 0.4)
 
     else:  # anóxica
 
-        # comportamiento no lineal
-        od = prev_od - np.random.uniform(0.1, 0.3)
+        od = prev_od - np.random.uniform(0.1, 0.35)
 
-        # ligera recuperación biológica
-        if od < 0.2:
-            od += np.random.uniform(0.01, 0.05)
+        # 🔥 evita quedarse en 0 constante
+        if od < 0.05:
+            od = np.random.uniform(0.05, 0.25)
 
-        od = max(od, 0)
-
-    # 🔥 ruido sensor (muy importante)
-    od += np.random.uniform(-0.04, 0.04)
+    # ruido sensor
+    od += np.random.uniform(-0.03, 0.03)
 
     return max(0, od)
 
@@ -105,41 +103,45 @@ def generar_estado(prev_od):
     fase = estado["fase"]
 
     # =========================================
-    # NH4
+    # NH4 (dependiente de OD)
     # =========================================
     if fase == "aireacion":
-        nh4_target = 6 + (3.5 - od) * np.random.uniform(0.7, 1.0)
+        nh4_target = 6 + (3.5 - od) * np.random.uniform(0.6, 1.0)
 
     elif fase == "transicion":
-        nh4_target = 7.5 + (2.5 - od) * np.random.uniform(0.8, 1.2)
+        nh4_target = 7.5 + (2.5 - od) * np.random.uniform(0.8, 1.3)
 
     else:
-        nh4_target = 9.5 + np.random.uniform(0.5, 1.8)
+        nh4_target = 9.5 + np.random.uniform(0.5, 2.0)
 
     nh4 = np.clip(
         0.85 * estado["nh4"] + 0.15 * nh4_target,
         6.0,
-        11.8
+        12.0
     )
 
     # =========================================
-    # NO3
+    # NO3 (DINÁMICO REAL)
     # =========================================
     if fase == "aireacion":
-        no3_target = 1.5 + (od * np.random.uniform(0.7, 1.0))
+        no3_target = estado["no3"] + np.random.uniform(0.3, 0.9)
 
     elif fase == "transicion":
-        no3_target = estado["no3"] - np.random.uniform(0.2, 0.6)
+        no3_target = estado["no3"] - np.random.uniform(0.1, 0.5)
 
     else:
-        no3_target = estado["no3"] - np.random.uniform(0.8, 1.6)
+        no3_target = estado["no3"] - np.random.uniform(0.8, 1.8)
 
-    no3 = 0.85 * estado["no3"] + 0.15 * np.clip(no3_target, 0.2, 6.5)
+    no3 = np.clip(
+        0.85 * estado["no3"] + 0.15 * no3_target,
+        0.1,
+        6.5
+    )
 
     # =========================================
     # NT
     # =========================================
-    nt = nh4 + no3 + np.random.uniform(0.2, 0.7)
+    nt = nh4 + no3 + np.random.uniform(0.2, 0.8)
 
     estado["nh4"] = nh4
     estado["no3"] = no3
@@ -194,7 +196,7 @@ def insertar_dato(data):
 # =========================================
 def ejecutar():
 
-    print("🚀 Simulador PTAR (Realista)")
+    print("🚀 Simulador PTAR (REALISTA PRO)")
 
     tiempo_simulado = int(obtener_ultimo_valor("tiempo_min", 0))
 
